@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="X-UA-Compatible" content="ie=edge" />
+  <title>Final Project CS7000</title>
+  <script src='https://api.mapbox.com/mapbox-gl-js/v0.53.0/mapbox-gl.js'></script>
+  <link href='https://api.mapbox.com/mapbox-gl-js/v0.53.0/mapbox-gl.css' rel='stylesheet' />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/102/three.min.js"></script>
+  <script src="src/js/pathfinding-browser.js"></script>
+  <script src="src/js/OrbitControls.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/dat-gui/0.7.5/dat.gui.min.js"></script>
+
+</head>
+
+<body>
+  <div id='map' style="width:1024px; height:512px; display: none"></div>
+
+</body>
+<script>
+  var onRenderFcts = [];
+  const config = {
+    xpad: 2,
+    ypad: 1,
+    zpad: 2
+  };
+  const create3Dmatrix = (x, y, z, width, height, depth) => {
+    let matrix = [];
+    for (let k = 0; k < y; k++) {
+      let h = [];
+      for (let j = 0; j < z; j++) {
+        let m = [];
+        for (let i = 0; i < x; i++) {
+          let neighbours = [];
+          let currentIndex = i + j * x + k * z * x;
+          let _left = i - 1 == -1 ? null : currentIndex - 1;
+          let _right = i + 1 == x ? null : currentIndex + 1;
+          let _top = j - 1 == -1 ? null : i + (j - 1) * z + k * x * z;
+          let _bottom = j + 1 == z ? null : i + (j + 1) * x + k * x * z;
+          let _down = k - 1 == -1 ? null : i + j * x + (k - 1) * x * z;
+          let _up = k + 1 == y ? null : i + j * x + (k + 1) * x * z;
+          if (_left != null) neighbours.push(_left);
+          if (_right != null) neighbours.push(_right);
+          if (_top != null) neighbours.push(_top);
+          if (_bottom != null) neighbours.push(_bottom);
+          if (_up != null) neighbours.push(_up);
+          if (_down != null) neighbours.push(_down);
+          m.push({
+            x: i,
+            y: k,
+            z: j,
+            x_2D: i * config.xpad,
+            y_2D: k * config.ypad,
+            z_2D: j * config.zpad,
+            x_3D: i * width / x - width / 2,
+            y_3D: k * depth / y,
+            z_3D: height / 2 - j * height / z,
+            walkable: 0, //true and 1 =false
+            node: i + j * x + k * z * x,
+            n_left: _left,
+            n_right: _right,
+            n_top: _top,
+            n_bottom: _bottom,
+            n_up: _up,
+            n_down: _down,
+            n_neighbours: neighbours
+          });
+        }
+        h.push(m);
+      }
+      matrix.push(h);
+    }
+    return matrix;
+  };
+
+  function updateNodes(mat, currentNodes) {
+    let curr = currentNodes;
+    mat.forEach(function (y) {
+      y.forEach(function (z) {
+        z.forEach(function (n) {
+          if (n.walkable == 0) {
+            //If a node is not walkable then no neighbours
+            n.n_neighbours.forEach(nb => {
+              if (mat[n.y][n.z][n.x].walkable == 0) {
+                //If its default neighbour is not walkable then pass else update
+                curr[n.node].neighbors.push(curr[nb]);
+              }
+            });
+          }
+        });
+      });
+    });
+    return curr;
+  }
+
+  function fillNodeData(mat) {
+    let nodes = [];
+    for (let y = 0; y < mat.length; y++) {
+      for (let z = 0; z < mat[y].length; z++) {
+        for (let x = 0; x < mat[y][z].length; x++) {
+          let node = new PF.Node(mat[y][z][x].x_3D, mat[y][z][x].y_3D, mat[y][z][x].z_3D);
+          node.id = mat[y][z][x].node;
+          node.indexX = mat[y][z][x].x;
+          node.indexY = mat[y][z][x].y;
+          node.indexZ = mat[y][z][x].z;
+          nodes.push(node);
+        }
+      }
+    }
+    return nodes;
+  }
+  const CENTER_LON = -101.875,
+    CENTER_LAT = 33.5845;
+  const zoom = 15;
+  const deg2rad = deg => {
+    return deg * (Math.PI / 180);
+  };
+  const mercatorY = lat => {
+    lat = deg2rad(lat);
+    return (
+      (256 / Math.PI) *
+      Math.pow(2, zoom) *
+      (Math.PI - Math.log(Math.tan(Math.PI / 4 + lat / 2)))
+    );
+  };
+  const mercatorX = lon => {
+    lon = deg2rad(lon);
+    return (256 / Math.PI) * Math.pow(2, zoom) * (lon + Math.PI);
+  };
+  const cx = mercatorX(CENTER_LON);
+  const cy = mercatorY(CENTER_LAT);
+  console.log(cx, cy)
+  const plane_width = 1024,
+    plane_height = 512;
+  let _static_Mapbox =
+    `https://api.mapbox.com/styles/v1/mapbox/light-v9/static/${CENTER_LON},${CENTER_LAT},${zoom},0,0/${plane_width}x${plane_height}?access_token=pk.eyJ1IjoidmluaG50IiwiYSI6ImNqb2VqdXZvaDE4cnkzcG80dXkxZzlhNWcifQ.G6sZ1ukp_DhiSmCvgKblVQ`;
+  let scene, camera, renderer;
+  scene = new THREE.Scene();
+  renderer = new THREE.WebGLRenderer({
+    antialias: false
+  });
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.setClearColor(0xffffff);
+  camera = new THREE.PerspectiveCamera(
+    75,
+    window.innerWidth / window.innerHeight,
+    0.1,
+    1000
+  );
+  let controls = new THREE.OrbitControls(camera, renderer.domElement);
+  controls.enableZoom = true;
+  controls.update();
+  document.body.appendChild(renderer.domElement);
+  animate();
+
+  function animate() {
+    requestAnimationFrame(animate);
+    renderer.render(scene, camera);
+    controls.update();
+  }
+
+  var planeGeometry = new THREE.PlaneGeometry(1024, plane_height);
+  var planeTexture = new THREE.TextureLoader().load(_static_Mapbox);
+  var planeMat = new THREE.MeshBasicMaterial({
+    map: planeTexture
+  });
+  var planeMesh = new THREE.Mesh(planeGeometry, planeMat);
+  planeMesh.name = 'plane';
+  scene.add(planeMesh);
+  camera.position.z = 300;
+  mapboxgl.accessToken = 'pk.eyJ1IjoidmluaG50IiwiYSI6ImNqb2VqdXZvaDE4cnkzcG80dXkxZzlhNWcifQ.G6sZ1ukp_DhiSmCvgKblVQ';
+  var map = new mapboxgl.Map({
+    container: 'map', // container id
+    style: 'mapbox://styles/mapbox/streets-v9', // stylesheet location
+    center: [CENTER_LON, CENTER_LAT], // starting position [lng, lat]
+    zoom: zoom // starting zoom
+  });
+  let bounds = map.getBounds();
+  // console.log(
+  //   `https://overpass-api.de/api/map?bbox=${bounds._sw.lng},${bounds._sw.lat},${bounds._ne.lng},${bounds._ne.lat}`)
+  fetch(
+      `https://overpass-api.de/api/map?bbox=${bounds._sw.lng},${bounds._sw.lat},${bounds._ne.lng},${bounds._ne.lat}`
+    )
+    .then(response => response.text())
+    .then(str => (new window.DOMParser()).parseFromString(str, "text/xml"))
+    .then(data => {
+      let nodeRef = [].map.call(data.querySelectorAll("node"), n => ({
+        id: n.getAttribute("id"),
+        lat: n.getAttribute("lat"),
+        lon: n.getAttribute("lon")
+      }));
+      let ways = [].map.call(data.querySelectorAll("way"), way => ({
+        id: way.getAttribute("id"),
+        nodes: [].map.call(way.querySelectorAll("nd"), ref => ({
+          ref: nodeRef.find(obj => obj.id == ref.getAttribute("ref"))
+        })),
+        type: [].map.call(way.querySelectorAll("tag"), tag => tag.getAttribute("k")),
+        isBuilding: (function () {
+          let _isBuilding = false;
+          way.querySelectorAll("tag").forEach(tag => {
+            let key = tag.getAttribute("k");
+            if (key == "building") {
+              _isBuilding = tag.getAttribute("v") == "yes";
+            }
+          });
+          return _isBuilding;
+        })(),
+        height: (function () {
+          let _height = 5;
+          way.querySelectorAll("tag").forEach(tag => {
+            let key = tag.getAttribute("k");
+            if (key == "building:levels") {
+              _height = 5 * tag.getAttribute("v");
+            } else if (key == "building:height") {
+              _height = tag.getAttribute("v");
+            }
+          });
+          return _height;
+        })()
+      }));
+      //Building list
+      let buildings = ways.filter(way => way.type.includes("building"));
+      let highways = ways.filter(way => way.type.includes("highway"));
+      var matrix = create3Dmatrix(32, 3, 16, 1024, 512, 60);
+      var nodes = fillNodeData(matrix);
+      var groupObstacles = new THREE.Group();
+      groupObstacles.name = 'obstacle';
+      //Add building
+      console.log(buildings);
+      for (let building of buildings) {
+
+        let shape = new THREE.Shape();
+        for (let [index, node] of building.nodes.entries()) {
+          let x = mercatorX(node.ref.lon) - cx;
+          let y = cy - mercatorY(node.ref.lat);
+          index == 0 ? shape.moveTo(x, y) : shape.lineTo(x, y);
+          console.log(x, y)
+        }
+        let shapeGeo = new THREE.ExtrudeBufferGeometry(shape, {
+          steps: 2,
+          depth: building.height,
+          bevelEnabled: false,
+          bevelThickness: 1,
+          bevelSize: 1,
+          bevelSegments: 1
+        });
+        let shapeMat = new THREE.MeshBasicMaterial({
+          color: "#993333",
+          opacity: 0.2,
+          transparent: true
+        });
+        let shapeMesh = new THREE.Mesh(shapeGeo, shapeMat);
+        shapeGeo.computeBoundingBox();
+        groupObstacles.add(shapeMesh);
+      }
+      console.log(groupObstacles)
+      scene.add(groupObstacles);
+      nodes.forEach(node => {
+        var objects = scene.getObjectByName("obstacle");
+        let material = new THREE.MeshBasicMaterial({
+          color: 0xff0000
+        });
+        for (let i = 0; i < objects.children.length; i++) {
+          var bbox = new THREE.Box3().setFromObject(objects.children[i]);
+          // console.log(bbox);
+
+          if (
+            bbox.containsPoint({
+              x: node.x,
+              y: node.z,
+              z: node.y
+            })
+          ) {
+            material = new THREE.MeshBasicMaterial({
+              color: 0xffff00,
+              wireframe: true
+            });
+            //Place some obstacles at given cells
+
+            matrix[node.indexY][node.indexZ][node.indexX].walkable = 1;
+            break;
+
+
+          }
+        }
+
+
+        let geometry = new THREE.BoxGeometry(1, 1, 1);
+
+        let cube = new THREE.Mesh(geometry, material);
+        cube.name = "grid";
+        cube.position.x = node.x;
+        cube.position.y = node.z;
+        cube.position.z = node.y;
+        scene.add(cube);
+      });
+      nodes = updateNodes(mamatrixtrix, nodes);
+      console.log(nodes)
+      console.log(matrix)
+      var finder = new PF.AStarFinder();
+      var path = finder.findPath(nodes[0], nodes[1500], nodes);
+      var lmaterial = new THREE.LineBasicMaterial({
+        color: 0x0000ff
+      });
+
+      var lgeometry = new THREE.Geometry();
+      if (path.length > 0) {
+        path.forEach(p => {
+          lgeometry.vertices.push(
+            new THREE.Vector3(p[0], p[2], p[1]),
+          );
+        })
+      }
+
+
+      var line = new THREE.Line(lgeometry, lmaterial);
+      scene.add(line);
+
+    });
+  createPanel();
+
+  function createPanel() {
+    var panel = new dat.GUI({
+      width: 310
+    });
+    var settings = {
+      map: {
+        longitude: '-101.875',
+        latitude: '33.5845',
+        zoom: 15,
+        update: updateMap
+      },
+      drone: {
+        x: 0,
+        y: 0,
+        z: 2
+      }
+
+    }
+    var _map = panel.addFolder('Map Configuration');
+    _map.add(settings.map, 'longitude')
+    _map.add(settings.map, 'latitude')
+    _map.add(settings.map, 'zoom', 0, 22)
+    _map.add(settings.map, 'update')
+    var _drone = panel.addFolder('Drone Configuration');
+    _drone.add(settings.drone, 'x', -512, 512);
+    _drone.add(settings.drone, 'y', -256, 256)
+    _drone.add(settings.drone, 'z', 1, 60)
+
+    var folder3 = panel.addFolder('Pausing/Stepping');
+    var folder4 = panel.addFolder('Crossfading');
+    var folder5 = panel.addFolder('Blend Weights');
+    var folder6 = panel.addFolder('General Speed');
+
+    function updateMap() {
+
+      scene.remove(scene.getObjectByName('plane'));
+      let img =
+        `https://api.mapbox.com/styles/v1/mapbox/light-v9/static/${settings.map.longitude},${settings.map.latitude},${settings.map.zoom},0,0/${plane_width}x${plane_height}?access_token=pk.eyJ1IjoidmluaG50IiwiYSI6ImNqb2VqdXZvaDE4cnkzcG80dXkxZzlhNWcifQ.G6sZ1ukp_DhiSmCvgKblVQ`;
+      let pl_texture = new THREE.TextureLoader().load(img);
+      let pl_material = new THREE.MeshBasicMaterial({
+        map: pl_texture
+      });
+
+      let pl_geometry = new THREE.PlaneGeometry(1024, plane_height);
+
+      var pl_mesh = new THREE.Mesh(pl_geometry, pl_material);
+      pl_mesh.name = 'plane';
+      scene.add(pl_mesh);
+      let _bounds = getBounds(settings.map.longitude, settings.map.latitude, settings.map.zoom)
+      getOSM(_bounds).then(response => response.text())
+        .then(str => (new window.DOMParser()).parseFromString(str, "text/xml"))
+        .then(data => {
+          console.log(getNodesList(data));
+        })
+
+    }
+
+    function getNodesList(osm) {
+      return [].map.call(osm.querySelectorAll("node"), n => ({
+        id: n.getAttribute("id"),
+        lat: n.getAttribute("lat"),
+        lon: n.getAttribute("lon")
+      }));
+    }
+
+    function getWaysList(osm) {
+      let ways = osm.querySelectorAll('way');
+      return ways;
+    }
+
+    async function getOSM() {
+      let osmData = await fetch(
+        `src/data/map_data.xml`
+      )
+      return osmData;
+
+    }
+
+
+    function getBounds(lon, lat, zoom) {
+      let _map = new mapboxgl.Map({
+        container: 'map', // container id
+        style: 'mapbox://styles/mapbox/streets-v9', // stylesheet location
+        center: [lon, lat], // starting position [lng, lat]
+        zoom: zoom // starting zoom
+      });
+      return _map.getBounds();
+    }
+
+  }
+</script>
+
+</html>

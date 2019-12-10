@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+  <title>Page Title</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+</head>
+<style>
+  canvas {
+    position: absolute;
+    top: 0;
+    z-index: 100;
+  }
+
+  video {
+    position: absolute;
+    top: 0;
+    z-index: 10;
+    width: 100%;
+    height: 100%;
+  }
+</style>
+
+<body>
+  <video autoplay></video>
+  <div id="map" style="display:none; width: 1024; height: 512;"></div>
+</body>
+<script src="./dist/bundle.js"></script>
+<script>
+  navigator.getUserMedia =
+    navigator.getUserMedia ||
+    navigator.webkitGetUserMedia ||
+    navigator.mozGetUserMedia;
+
+  if (navigator.getUserMedia) {
+    navigator.getUserMedia({
+        audio: false,
+        video: {
+          width: 1280,
+          height: 720,
+          facingMode: {
+            exact: "environment"
+          }
+        }
+      },
+      function (stream) {
+        var video = document.querySelector("video");
+        video.srcObject = stream;
+        video.onloadedmetadata = function (e) {
+          video.play();
+        };
+      },
+      function (err) {
+        console.log("The following error occurred: " + err.name);
+      }
+    );
+  } else {
+    console.log("getUserMedia not supported");
+  }
+</script>
+
+</html>

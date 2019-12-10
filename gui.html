@@ -1,0 +1,750 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+    <title>Document</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/102/three.min.js"></script>
+    <script src='https://api.mapbox.com/mapbox-gl-js/v0.53.0/mapbox-gl.js'></script>
+    <link href='https://api.mapbox.com/mapbox-gl-js/v0.53.0/mapbox-gl.css' rel='stylesheet' />
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/dat-gui/0.7.5/dat.gui.min.js"></script>
+    <script src="src/js/OrbitControls.js"></script>
+    <script src="https://threejs.org/examples/js/loaders/GLTFLoader.js"></script>
+    <script src="src/js/pathfinding-browser.js"></script>
+    <script src="src/js/DragControls.js"></script>
+</head>
+
+<body>
+    <div id='map' style="width:1024px; height:512px; display: none"></div>
+
+</body>
+<script>
+    class SceneManager {
+        constructor() {
+            this.scene = new THREE.Scene();
+            this.renderer = new THREE.WebGLRenderer({
+                antialias: false
+            });
+            this.camera = new THREE.PerspectiveCamera(
+                75,
+                window.innerWidth / window.innerHeight,
+                0.1,
+                1000
+            );
+            this.clock = new THREE.Clock();
+            this.group = new THREE.Group();
+            this.group.name = 'building';
+            this.line = new THREE.Group();
+            this.line.name = 'lines';
+            this.matrix = new THREE.Group();
+            this.matrix.name = 'matrix';
+            this.objects = [];
+            this.nodes = [];
+            this.agent = new THREE.Mesh(new THREE.BoxGeometry(10, 10, 10), new THREE.MeshBasicMaterial({
+                color: 0x00ff00
+            }));
+            this.target = new THREE.Group();
+            this.raycaster = new THREE.Raycaster();
+            this.mouse = new THREE.Vector2();
+            this.sphereInter = new THREE.Mesh(new THREE.SphereBufferGeometry(5), new THREE.MeshBasicMaterial({
+                color: 0xff0000
+            }));
+            this.animationPoints = new THREE.Geometry();
+            this.plane = {
+                width: 1024,
+                height: 512,
+                depth: 60,
+                width_segment: 30,
+                height_segment: 16,
+                depth_segment: 3
+            }
+            this.mixer = null;
+            window.addEventListener('resize', this.onResize, false);
+            window.addEventListener('mousemove', this.onDocumentMouseMove, false);
+        }
+        startAnimation = () => {
+            console.log(this.animationPoints)
+            let time = [];
+            let points = [];
+            this.animationPoints.vertices.forEach((d, i) => {
+                time.push(i);
+                points.push(d.x);
+                points.push(d.y);
+                points.push(d.z);
+            })
+            let positionKF = new THREE.VectorKeyframeTrack('.position', time, points);
+            let clip = new THREE.AnimationClip('Action', time.length, [positionKF]);
+            this.mixer = new THREE.AnimationMixer(this.agent);
+            let clipAction = this.mixer.clipAction(clip);
+            clipAction.play();
+
+        }
+        onDocumentMouseMove = (event) => {
+            event.preventDefault();
+            this.mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+            this.mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+        }
+        onResize = () => {
+            this.camera.aspect = window.innerWidth / window.innerHeight;
+            this.camera.updateProjectionMatrix();
+            this.renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+        addTarget = () => {
+            const clamp = (val, min, max) => {
+                return Math.min(Math.max(min, val), max);
+            }
+
+            const getRandom = (min, max) => {
+                return Math.random() * (max - min) + min;
+            }
+            let targetGeo = new THREE.BoxGeometry(10, 10, 10);
+            let targetMat = new THREE.MeshBasicMaterial({
+                color: 0xff0000
+            });
+            let target = new THREE.Mesh(targetGeo, targetMat);
+            target.name = 'target';
+            target.position.set(getRandom(-512, 512), getRandom(-256, 256), getRandom(0, 40))
+            this.objects.push(target);
+            this.target.add(target);
+        }
+        updateDrone = (x, y, z) => {
+            this.agent.position.set(x, y, z);
+            this.resetLine();
+            //this.generatePath();
+        }
+        resetLine = () => {
+
+            for (var i = this.line.children.length - 1; i >= 0; i--) {
+
+                this.line.remove(this.line.children[i]);
+                this.line.children[i].geometry.dispose();
+                this.line.children[i].material.dispose();
+                this.scene.remove(this.line.children[i]);
+            }
+
+        }
+        getNodeIndex = (w, h, d, width, height) => {
+            return w + h * width + d * width * height;
+        }
+        world3DtoGrid = (position, width, height, depth, w_width, w_height, w_depth) => {
+            let pos = position.clone();
+            pos.x += w_width / 2;
+            pos.y = w_height / 2 - pos.y;
+            let cor = {}
+            cor.xGrid = Math.round((pos.x / w_width) * width);
+            cor.yGrid = Math.round((pos.y / w_height) * height);
+            cor.zGrid = Math.round((pos.z / w_depth) * depth)
+            return cor;
+        }
+        world3DtoNode = (pos) => {
+            let targetGridIndex = this.world3DtoGrid(pos, this.plane.width_segment, this.plane
+                .height_segment,
+                this.plane
+                .depth_segment, this.plane.width, this.plane.height, this.plane.depth);
+            return this.getNodeIndex(targetGridIndex.xGrid, targetGridIndex.yGrid,
+                targetGridIndex.zGrid,
+                this.plane.width_segment, this.plane.height_segment);
+        }
+        nearestNeighbours = () => {
+            const paths = [];
+            let finder = new PF.AStarFinder({
+                heuristic: PF.Heuristic.euclidean
+            });
+            //get current agent position 
+            let _agentPos = this.agent.position;
+            //get agent index;
+            let srcGridIndex = this.world3DtoGrid(_agentPos, this.plane.width_segment, this.plane.height_segment,
+                this.plane
+                .depth_segment, this.plane.width, this.plane.height, this.plane.depth);
+            let srcIndex = this.getNodeIndex(srcGridIndex.xGrid, srcGridIndex.yGrid, srcGridIndex.zGrid, this.plane
+                .width_segment,
+                this.plane.height_segment);
+            paths.push({
+                from: srcIndex,
+                to: srcIndex,
+                paths: [],
+                node: this.nodes[srcIndex]
+            }); //First point
+
+            let temparray = this.target.children.slice(0);
+            let temp = [];
+            var self = this;
+            while (temparray.length > 0) {
+                //For each target, calculate the shortest distance to the nearest Node
+                let index, cost = 5000;
+                temparray.forEach((t, i) => {
+                    self.resetMatrix();
+
+                    let _targetIndex = self.world3DtoNode(t.position);
+                    let _path = finder.findPath(self.nodes[srcIndex], self.nodes[_targetIndex],
+                        self.nodes);
+                    if (_path.length < cost) {
+                        cost = _path.length;
+                        index = i;
+                    }
+                    temp.push({
+                        from: srcIndex,
+                        to: i,
+                        along: _path
+                    });
+                })
+                let preSrc = srcIndex;
+                srcIndex = self.world3DtoNode(temparray[index].position);
+                paths.push({
+                    from: preSrc,
+                    to: srcIndex,
+                    paths: temp[index].along,
+                    node: this.nodes[srcIndex]
+                })
+                temparray.splice(index, 1);
+                temp = [];
+            }
+
+            return paths;
+        }
+        resetMatrix = () => {
+            this.nodes = [];
+            this.generateMatrix(this.plane.width_segment, this.plane.height_segment, this.plane.depth_segment,
+                this
+                .plane.width, this.plane.height, this.plane.depth);
+        }
+        generatePath = () => {
+
+            this.resetLine();
+            this.generateMatrix(this.plane.width_segment, this.plane.height_segment, this.plane.depth_segment,
+                this
+                .plane.width, this.plane.height, this.plane.depth);
+
+            const getNodeIndex = (w, h, d, width, height) => {
+                return w + h * width + d * width * height;
+            }
+            const world3DtoGrid = (position, width, height, depth, w_width, w_height, w_depth) => {
+                let pos = position.clone();
+                pos.x += w_width / 2;
+                pos.y = w_height / 2 - pos.y;
+                let cor = {}
+                cor.xGrid = Math.round((pos.x / w_width) * width);
+                cor.yGrid = Math.round((pos.y / w_height) * height);
+                cor.zGrid = Math.round((pos.z / w_depth) * depth)
+                return cor;
+            }
+
+            let allpaths = this.nearestNeighbours();
+            let lmaterial = new THREE.LineBasicMaterial({
+                color: 0x0000ff
+            });
+
+            let lgeometry = new THREE.Geometry();
+            if (allpaths.length > 0) {
+                allpaths.forEach(path => {
+                    if (path.paths.length > 0) {
+                        path.paths.forEach(p => {
+                            lgeometry.vertices.push(
+                                new THREE.Vector3(p[0], p[1], p[2]),
+                            );
+                        })
+                    }
+                })
+            } else {
+                alert("No path found.....")
+            }
+
+
+            let line = new THREE.Line(lgeometry, lmaterial);
+            this.animationPoints = lgeometry;
+            this.line.add(line);
+            this.scene.add(this.line);
+        }
+        showMatrix = (status) => {
+            this.scene.getObjectByName('matrix').visible = status;
+        }
+        generateMatrix = (width, height, depth, w_world, h_world, d_world) => {
+            this.plane.width = w_world;
+            this.plane.height = h_world;
+            this.plane.depth = d_world;
+            this.plane.width_segment = width;
+            this.plane.height_segment = height;
+            this.plane.depth_segment = depth;
+            const create3Dmatrix = (width, height, depth, w_world, h_world, d_world) => {
+                let matrix = [];
+                for (let d = 0; d < depth; d++) {
+                    let _h = [];
+                    for (let h = 0; h < height; h++) {
+                        let m = [];
+                        for (let w = 0; w < width; w++) {
+                            let neighbours = [];
+                            let currentIndex = w + h * width + d * height * width;
+                            let _left = w == 0 ? null : currentIndex - 1;
+                            let _right = w + 1 == width ? null : currentIndex + 1;
+                            let _top = h == 0 ? null : w + (h - 1) * width + d * height * width;
+                            let _bottom = h + 1 == height ? null : w + (h + 1) * width + d * height *
+                                width;
+                            let _down = d == 0 ? null : w + h * width + (d - 1) * width * height;
+                            let _up = d + 1 == depth ? null : w + h * width + (d + 1) * width * height;
+                            if (_left != null) neighbours.push(_left);
+                            if (_right != null) neighbours.push(_right);
+                            if (_top != null) neighbours.push(_top);
+                            if (_bottom != null) neighbours.push(_bottom);
+                            if (_up != null) neighbours.push(_up);
+                            if (_down != null) neighbours.push(_down);
+                            m.push({
+                                x: w,
+                                y: h,
+                                z: d,
+                                x_2D: w * (w_world / width),
+                                y_2D: h * (h_world / height),
+                                z_2D: d * (d_world / depth),
+                                x_3D: w * (w_world / width) - w_world / 2,
+                                y_3D: h_world / 2 - h * (h_world / height),
+                                z_3D: d * (d_world / depth),
+                                walkable: 0, //true and 1 =false
+                                nodeIndex: w + h * width + d * height * width,
+                                n_left: _left,
+                                n_right: _right,
+                                n_top: _top,
+                                n_bottom: _bottom,
+                                n_up: _up,
+                                n_down: _down,
+                                n_neighbours: neighbours
+                            });
+                        }
+                        _h.push(m);
+                    }
+                    matrix.push(_h);
+                }
+                return matrix;
+            };
+
+
+            const clamp = (val, min, max) => {
+                return Math.min(Math.max(min, val), max);
+            }
+            const projectMatrix = (matrix) => {
+                let nodes = [];
+                matrix.forEach((height, d) => {
+                    height.forEach((width, h) => {
+                        width.forEach((element, w) => {
+                            let index = w + h * width.length + d * height.length *
+                                width.length;
+                            let node = new PF.Node(element.x_3D, element.y_3D,
+                                element.z_3D);
+                            node.index = index;
+                            node.xGrid = element.x;
+                            node.yGrid = element.y;
+                            node.zGrid = element.z;
+                            nodes.push(node)
+                        })
+                    })
+                });
+                return nodes;
+            }
+
+            const updateNodes = (mat, currentNodes) => {
+                let curr = currentNodes;
+
+                mat.forEach((height, d) => {
+                    height.forEach((width, h) => {
+                        width.forEach((element, w) => {
+                            let index = w + h * width.length + d * height.length *
+                                width.length;
+                            if (element.walkable == 0) {
+                                //Go to its neighbours
+                                element.n_neighbours.forEach(n => {
+                                    //Check if the neighbour index is walkable
+                                    if (mat[curr[n].zGrid][curr[n].yGrid]
+                                        [curr[
+                                            n].xGrid].walkable == 0) {
+                                        curr[index].neighbors.push(curr[
+                                            n]);
+                                    }
+                                })
+                            }
+                        })
+                    })
+                });
+                return curr;
+            }
+
+
+            let matrix = create3Dmatrix(width, height, depth, w_world, h_world, d_world);
+            let nodes = projectMatrix(matrix);
+            var self = this;
+            nodes.forEach(node => {
+                var objects = self.scene.getObjectByName("building");
+                let material = new THREE.MeshBasicMaterial({
+                    color: 0xff0000
+                });
+                for (let i = 0; i < objects.children.length; i++) {
+                    var bbox = new THREE.Box3().setFromObject(objects.children[i]);
+                    // console.log(bbox);
+
+                    if (
+                        bbox.containsPoint({
+                            x: node.x,
+                            y: node.y,
+                            z: node.z
+                        })
+                    ) {
+                        material = new THREE.MeshBasicMaterial({
+                            color: 0xffff00,
+                            wireframe: true
+                        });
+                        //Place some obstacles at given cells
+
+                        matrix[node.zGrid][node.yGrid][node.xGrid].walkable = 1;
+                        break;
+
+
+                    }
+                }
+
+
+                let geometry = new THREE.BoxGeometry(1, 1, 1);
+
+                let cube = new THREE.Mesh(geometry, material);
+                cube.name = "grid";
+                cube.position.x = node.x;
+                cube.position.y = node.y;
+                cube.position.z = node.z;
+                this.matrix.add(cube);
+
+            });
+            self.scene.add(this.matrix);
+            nodes = updateNodes(matrix, nodes);
+            this.nodes = nodes;
+        }
+        showHideBuildings = (status) => {
+            this.scene.getObjectByName('building').visible = status;
+        }
+        drawBuildings = (buildings, CENTER_LON, CENTER_LAT, zoom) => {
+            const deg2rad = deg => {
+                return deg * (Math.PI / 180);
+            };
+            const mercatorY = lat => {
+                lat = deg2rad(lat);
+                return (
+                    (256 / Math.PI) *
+                    Math.pow(2, zoom) *
+                    (Math.PI - Math.log(Math.tan(Math.PI / 4 + lat / 2)))
+                );
+            };
+            const mercatorX = lon => {
+                lon = deg2rad(lon);
+                return (256 / Math.PI) * Math.pow(2, zoom) * (lon + Math.PI);
+            };
+            const cx = mercatorX(parseFloat(CENTER_LON));
+            const cy = mercatorY(parseFloat(CENTER_LAT));
+            this.agent.position.set(0, 0, 0);
+            this.agent.name = 'agent';
+
+            this.objects.push(this.agent)
+            this.scene.add(this.agent);
+            for (let building of buildings) {
+
+                let shape = new THREE.Shape();
+                building.node.forEach((node, index) => {
+                    let temp1 = mercatorX(parseFloat(node.lon));
+                    let x = mercatorX(parseFloat(node.lon)) - cx;
+                    let y = cy - mercatorY(parseFloat(node.lat));
+                    index == 0 ? shape.moveTo(x, y) : shape.lineTo(x, y);
+                })
+                let default_height = 10;
+                building.tags.forEach(tag => {
+                    if (tag.k == "building:levels") {
+                        default_height *= tag.v;
+                    } else if (tag.k == "building:height") {
+                        default_height = tag.v;
+                    }
+                })
+                let shapeGeo = new THREE.ExtrudeBufferGeometry(shape, {
+                    steps: 2,
+                    depth: default_height,
+                    bevelEnabled: false,
+                    bevelThickness: 1,
+                    bevelSize: 1,
+                    bevelSegments: 1
+                });
+                let shapeMat = new THREE.MeshBasicMaterial({
+                    color: "#993333",
+                    opacity: 1,
+                    transparent: true
+                });
+                let shapeMesh = new THREE.Mesh(shapeGeo, shapeMat);
+                shapeGeo.computeBoundingBox();
+                this.group.add(shapeMesh);
+            }
+
+            this.scene.add(this.group);
+        }
+        drawPlane = (img) => {
+            this.scene.remove(this.scene.getObjectByName('plane'));
+            let pl_texture = new THREE.TextureLoader().load(img);
+            let pl_material = new THREE.MeshBasicMaterial({
+                map: pl_texture
+            });
+
+            let pl_geometry = new THREE.PlaneGeometry(1024, 512);
+            var pl_mesh = new THREE.Mesh(pl_geometry, pl_material);
+            pl_mesh.name = 'plane';
+            this.scene.add(pl_mesh);
+            this.camera.position.z = 500;
+        }
+        init = () => {
+            const that = this;
+            this.camera.position.z = 5;
+            let controls = new THREE.OrbitControls(this.camera, this.renderer.domElement);
+            controls.enableZoom = true;
+            controls.update();
+            this.renderer.setSize(window.innerWidth, window.innerHeight);
+            this.renderer.setClearColor(0xffffff);
+            document.body.appendChild(this.renderer.domElement);
+            var dragControls = new THREE.DragControls(this.objects, this.camera, this.renderer.domElement);
+
+
+
+            this.sphereInter.visible = false;
+            this.scene.add(this.sphereInter);
+            //sthis.raycaster.linePrecision = 3;
+
+            this.scene.add(this.target);
+
+
+            dragControls.addEventListener('dragstart', function () {
+
+                controls.enabled = false;
+
+            });
+            dragControls.addEventListener('dragend', function () {
+
+                controls.enabled = true;
+
+            });
+
+            animate()
+
+
+            function animate() {
+                requestAnimationFrame(animate);
+                controls.update();
+                var delta = that.clock.getDelta();
+                if (that.mixer != null) {
+                    that.mixer.update(delta);
+                }
+                that.camera.updateMatrixWorld();
+                that.raycaster.setFromCamera(that.mouse, that.camera);
+                let intersects = that.raycaster.intersectObjects(that.line.children, true);
+                if (intersects.length > 0) {
+                    that.sphereInter.visible = true;
+                    that.sphereInter.position.copy(intersects[0].point);
+                } else {
+                    that.sphereInter.visible = false;
+                }
+                that.renderer.render(that.scene, that.camera);
+
+            }
+
+
+        }
+
+    }
+    var manager = new SceneManager();
+    manager.init();
+    var panel = new dat.GUI({
+        width: 310
+    });
+    var settings = {
+        map: {
+            longitude: '-101.875',
+            latitude: '33.5845',
+            zoom: 15,
+            update_all: updateMap,
+            offline: true,
+            width: 1024,
+            height: 512,
+            depth: 60,
+            width_segment: 30,
+            height_segment: 16,
+            depth_segment: 3
+        },
+        drone: {
+            x: 0,
+            y: 0,
+            z: 2
+        },
+        renderBuilding: true,
+        pathFinding: {
+            createMatrix: createMatrix,
+            showMatrix: true,
+            generatePath: generatePath,
+            addTarget: addTarget,
+            startAnimation: startAnimation
+        },
+
+
+    }
+    var _map = panel.addFolder('Map Configuration');
+    _map.add(settings.map, 'offline');
+    _map.add(settings.map, 'longitude')
+    _map.add(settings.map, 'latitude')
+    _map.add(settings.map, 'zoom', 0, 22);
+    _map.add(settings.map, 'width')
+    _map.add(settings.map, 'height')
+    _map.add(settings.map, 'depth');
+    _map.add(settings.map, 'width_segment')
+    _map.add(settings.map, 'height_segment')
+    _map.add(settings.map, 'depth_segment');
+    _map.add(settings.map, 'update_all')
+    var _drone = panel.addFolder('Drone Configuration');
+    _drone.add(settings.drone, 'x', -512, 512).onChange(updateDrone);
+    _drone.add(settings.drone, 'y', -256, 256).onChange(updateDrone)
+    _drone.add(settings.drone, 'z', 1, 60).onChange(updateDrone)
+    _drone.add(settings.pathFinding, 'addTarget')
+    var _building = panel.addFolder('Buildings');
+    _building.add(settings, 'renderBuilding').onChange(showBuilding)
+
+    var _pathFinding = panel.addFolder('Path finding 3D');
+    _pathFinding.add(settings.pathFinding, 'createMatrix');
+    _pathFinding.add(settings.pathFinding, 'showMatrix').onChange(showMatrix);
+    _pathFinding.add(settings.pathFinding, 'generatePath');
+    _pathFinding.add(settings.pathFinding, 'startAnimation');
+    var folder6 = panel.addFolder('General Speed');
+
+    function startAnimation() {
+        manager.startAnimation();
+    }
+
+    function addTarget() {
+        manager.addTarget();
+    }
+
+    function updateDrone() {
+        manager.updateDrone(settings.drone.x, settings.drone.y, settings.drone.z)
+    }
+
+    function generatePath() {
+        manager.generatePath();
+    }
+
+    function createMatrix() {
+        manager.generateMatrix(settings.map.width_segment, settings.map.height_segment, settings.map.depth_segment,
+            settings.map.width, settings.map.height, settings.map.depth);
+    }
+
+    function showMatrix(status) {
+        manager.showMatrix(status);
+    }
+
+    function showBuilding(status) {
+        manager.showHideBuildings(status);
+    }
+
+    function extractNodes(xmls, nodes) {
+        let waysObj = [];
+        xmls.forEach(xml => {
+            let wayId = xml.getAttribute('id');
+            let node = [];
+            xml.querySelectorAll('nd').forEach(nd => {
+                let ref = nd.getAttribute('ref');
+                let lat = nodes[ref].lat;
+                let lon = nodes[ref].lon;
+                node.push({
+                    ref,
+                    lat,
+                    lon
+                })
+            })
+            let tags = [];
+            xml.querySelectorAll('tag').forEach(tag => {
+                let k = tag.getAttribute('k');
+                let v = tag.getAttribute('v');
+                tags.push({
+                    k,
+                    v
+                })
+            })
+            waysObj.push({
+                wayId,
+                node,
+                tags
+            })
+        })
+        return waysObj;
+
+    }
+
+
+
+
+    function updateMap() {
+
+        let img =
+            `https://api.mapbox.com/styles/v1/mapbox/light-v9/static/${settings.map.longitude},${settings.map.latitude},${settings.map.zoom},0,0/${settings.map.width}x${settings.map.height}?access_token=pk.eyJ1IjoidmluaG50IiwiYSI6ImNqb2VqdXZvaDE4cnkzcG80dXkxZzlhNWcifQ.G6sZ1ukp_DhiSmCvgKblVQ`;
+        manager.drawPlane(img);
+        getOSM().then(response => response.text())
+            .then(str => (new window.DOMParser()).parseFromString(str, "text/xml"))
+            .then(data => {
+                let _data = extractNodesandWays(data);
+                let waysXML = _data.ways;
+                let nodes = _data.nodes;
+                let ways = extractNodes(waysXML, nodes);
+                let buildings = extractBuildings(ways);
+                manager.drawBuildings(buildings, settings.map.longitude, settings.map.latitude, settings.map.zoom);
+
+            })
+
+        function extractBuildings(ways) {
+            let buildings = [];
+            ways.forEach(way => {
+                way.tags.forEach(tag => {
+                    if (tag.k.includes('building')) {
+                        buildings.push(way);
+                    }
+                })
+            })
+            return buildings;
+        }
+
+        function extractNodesandWays(osm) {
+            let nodes = {};
+            osm.querySelectorAll("node").forEach(n => {
+                nodes[n.getAttribute("id")] = {
+                    lat: n.getAttribute("lat"),
+                    lon: n.getAttribute("lon")
+                }
+            });
+            let ways = osm.querySelectorAll('way');
+            return {
+                nodes,
+                ways
+            }
+        }
+
+        async function getOSM() {
+            let bounds, url;
+            if (settings.map.offline) {
+                url = 'src/data/map_data.xml';
+            } else {
+                mapboxgl.accessToken =
+                    'pk.eyJ1IjoidmluaG50IiwiYSI6ImNqb2VqdXZvaDE4cnkzcG80dXkxZzlhNWcifQ.G6sZ1ukp_DhiSmCvgKblVQ';
+                var map = new mapboxgl.Map({
+                    container: 'map', // container id
+                    style: 'mapbox://styles/mapbox/streets-v9', // stylesheet location
+                    center: [settings.map.longitude, settings.map.latitude], // starting position [lng, lat]
+                    zoom: settings.map.zoom // starting zoom
+                });
+                let bounds = map.getBounds();
+                url =
+                    `https://overpass-api.de/api/map?bbox=${bounds._sw.lng},${bounds._sw.lat},${bounds._ne.lng},${bounds._ne.lat}`
+            }
+
+
+
+            return await fetch(url);
+
+        }
+    }
+</script>
+
+</html>

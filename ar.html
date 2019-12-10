@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+    <title>Document</title>
+    <script src='https://api.mapbox.com/mapbox-gl-js/v0.53.0/mapbox-gl.js'></script>
+    <link href='https://api.mapbox.com/mapbox-gl-js/v0.53.0/mapbox-gl.css' rel='stylesheet' />
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/102/three.min.js"></script>
+    <script src="src/js/OrbitControls.js"></script>
+    <script src="src/js/astar.js"></script>
+    <script src="src/js/ar.min.js"></script>
+</head>
+<style>
+    #map {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        width: 1024px;
+        height: 512px;
+        display: none;
+    }
+</style>
+
+<body>
+    <div id="map"></div>
+
+</body>
+<script>
+    var renderer = new THREE.WebGLRenderer({
+        antialias: true,
+        alpha: true
+    });
+    renderer.setClearColor(new THREE.Color('lightgrey'), 0)
+    renderer.setSize(640, 480);
+    renderer.domElement.style.position = 'absolute'
+    renderer.domElement.style.top = '0px'
+    renderer.domElement.style.left = '0px'
+    document.body.appendChild(renderer.domElement);
+    var onRenderFcts = [];
+    var scene = new THREE.Scene();
+    var camera = new THREE.Camera();
+    camera.position.z = 500;
+    scene.add(camera);
+
+    var arToolkitSource = new THREEx.ArToolkitSource({
+        sourceType: 'webcam',
+    })
+    arToolkitSource.init(function onReady() {
+        onResize()
+    })
+    window.addEventListener('resize', function () {
+        onResize()
+    })
+
+    function onResize() {
+        arToolkitSource.onResize()
+        arToolkitSource.copySizeTo(renderer.domElement)
+        if (arToolkitContext.arController !== null) {
+            arToolkitSource.copySizeTo(arToolkitContext.arController.canvas)
+        }
+    }
+    ////////////////////////////////////////////////////////////////////////////////
+    //          initialize arToolkitContext
+    ////////////////////////////////////////////////////////////////////////////////	
+    // create atToolkitContext
+    var arToolkitContext = new THREEx.ArToolkitContext({
+        cameraParametersUrl: 'src/data/camera_para.dat',
+        detectionMode: 'mono',
+    })
+    // initialize it
+    arToolkitContext.init(function onCompleted() {
+        // copy projection matrix to camera
+        camera.projectionMatrix.copy(arToolkitContext.getProjectionMatrix());
+    })
+    // update artoolkit on every frame
+    onRenderFcts.push(function () {
+        if (arToolkitSource.ready === false) return
+        arToolkitContext.update(arToolkitSource.domElement)
+    })
+
+
+    ////////////////////////////////////////////////////////////////////////////////
+    //          Create a ArMarkerControls
+    ////////////////////////////////////////////////////////////////////////////////
+
+    var markerRoot = new THREE.Group
+    scene.add(markerRoot)
+    var artoolkitMarker = new THREEx.ArMarkerControls(arToolkitContext, markerRoot, {
+        type: 'pattern',
+        patternUrl: 'src/data/patt.hiro',
+    })
+    //Global config
+
+    const CENTER_LON = -101.875,
+        CENTER_LAT = 33.5845;
+    const zoom = 15;
+    //add map to the scene
+    const plane_width = 1024,
+        plane_height = 512;
+    let _static_Mapbox =
+        `https://api.mapbox.com/styles/v1/mapbox/light-v9/static/${CENTER_LON},${CENTER_LAT},${zoom},0,0/${plane_width}x${plane_height}?access_token=pk.eyJ1IjoidmluaG50IiwiYSI6ImNqb2VqdXZvaDE4cnkzcG80dXkxZzlhNWcifQ.G6sZ1ukp_DhiSmCvgKblVQ`;
+
+
+    const planeGeometry = new THREE.PlaneGeometry(plane_width, plane_height);
+    let planeTexture = new THREE.TextureLoader().load(_static_Mapbox);
+    const planeMat = new THREE.MeshBasicMaterial({
+        map: planeTexture
+    });
+    const planeMesh = new THREE.Mesh(planeGeometry, planeMat);
+    planeMesh.rotation.x = -Math.PI / 2;
+    planeMesh.position.y = -500;
+    markerRoot.add(planeMesh);
+
+
+    //////////////////////////////////////////////////////////////////////////////////
+    //		render the whole thing on the page
+    //////////////////////////////////////////////////////////////////////////////////
+    // render the scene
+    onRenderFcts.push(function () {
+        renderer.render(scene, camera);
+    })
+    // run the rendering loop
+    var lastTimeMsec = null
+    requestAnimationFrame(function animate(nowMsec) {
+        // keep looping
+        requestAnimationFrame(animate);
+        // measure time
+        lastTimeMsec = lastTimeMsec || nowMsec - 1000 / 60
+        var deltaMsec = Math.min(200, nowMsec - lastTimeMsec)
+        lastTimeMsec = nowMsec
+        // call each update function
+        onRenderFcts.forEach(function (onRenderFct) {
+            onRenderFct(deltaMsec / 1000, nowMsec / 1000)
+        })
+    })
+</script>
+
+</html>

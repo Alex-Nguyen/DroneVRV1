@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+    <title>Document</title>
+</head>
+
+<body>
+
+</body>
+<script>
+    function create3DMatrix(width, height, depth, w_world, h_world, d_world) {
+        let matrix = [];
+        for (let d = 0; d < depth; d++) {
+            let _h = [];
+            for (let h = 0; h < height; h++) {
+                let m = [];
+                for (let w = 0; w < width; w++) {
+                    let neighbours = [];
+                    let currentIndex = w + h * width + d * height * width;
+                    let _left = w == 0 ? null : currentIndex - 1;
+                    let _right = w + 1 == width ? null : currentIndex + 1;
+                    let _top = h == 0 ? null : w + (h - 1) * width + d * height * width;
+                    let _bottom = h + 1 == height ? null : w + (h + 1) * width + d * height * width;
+                    let _down = d == 0 ? null : w + h * width + (d - 1) * width * height;
+                    let _up = d + 1 == depth ? null : w + h * width + (d + 1) * width * height;
+                    if (_left != null) neighbours.push(_left);
+                    if (_right != null) neighbours.push(_right);
+                    if (_top != null) neighbours.push(_top);
+                    if (_bottom != null) neighbours.push(_bottom);
+                    if (_up != null) neighbours.push(_up);
+                    if (_down != null) neighbours.push(_down);
+                    m.push({
+                        x: w,
+                        y: h,
+                        z: d,
+                        x_2D: w * (w_world / width),
+                        y_2D: h * (h_world / height),
+                        z_2D: d * (d_world / depth),
+                        x_3D: w * (w_world / width) - w_world / 2,
+                        y_3D: h_world / 2 - h * (h_world / height),
+                        z_3D: d * (d_world / depth),
+                        walkable: 0, //true and 1 =false
+                        nodeIndex: w + h * width + d * height * width,
+                        n_left: _left,
+                        n_right: _right,
+                        n_top: _top,
+                        n_bottom: _bottom,
+                        n_up: _up,
+                        n_down: _down,
+                        n_neighbours: neighbours
+                    });
+                }
+                _h.push(m);
+            }
+            matrix.push(_h);
+        }
+        return matrix;
+    }
+
+    function getNodeIndex(w, h, d, width, height) {
+        return w + h * width + d * width * height;
+    }
+
+    function centerToNormal(pos, width, height, depth, w_width, w_height, w_depth) {
+        pos.x += w_width / 2;
+        pos.y = w_height / 2 - pos.y;
+        let cor = {}
+        cor.xGrid = Math.round((pos.x / w_width) * width);
+        cor.yGrid = Math.round((pos.y / w_height) * height);
+        cor.zGrid = Math.round((pos.z / w_depth) * depth)
+        return cor;
+    }
+
+    function clamp(val, min, max) {
+        return Math.min(Math.max(min, val), max);
+    }
+
+    function projectMatrix(matrix) {
+        let nodes = [];
+        matrix.forEach((height, d) => {
+            height.forEach((width, h) => {
+                width.forEach((element, w) => {
+                    let index = w + h * width.length + d * height.length * width.length;
+                    nodes.push({
+                        index,
+                        element
+                    })
+                })
+            })
+        });
+        return nodes;
+    }
+    var matrix = create3DMatrix(32, 16, 3, 1024, 512, 3);
+    var node = projectMatrix(matrix);
+    var pos = {
+        x: 0,
+        y: 0,
+        z: 2.5
+    }
+    console.log(centerToNormal(pos, 32, 16, 3, 1024, 512, 3))
+    console.log(node)
+    function fillNodeData(mat) {
+                let nodes = [];
+                for (let y = 0; y < mat.length; y++) {
+                    for (let z = 0; z < mat[y].length; z++) {
+                        for (let x = 0; x < mat[y][z].length; x++) {
+                            let node = new PF.Node(mat[y][z][x].x_3D, mat[y][z][x].y_3D, mat[y][z][x].z_3D);
+                            node.id = mat[y][z][x].node;
+                            node.indexX = mat[y][z][x].x;
+                            node.indexY = mat[y][z][x].y;
+                            node.indexZ = mat[y][z][x].z;
+                            nodes.push(node);
+                        }
+                    }
+                }
+                return nodes;
+            }
+</script>
+
+</html>

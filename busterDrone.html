@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+    <title>Buster Drone</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/102/three.min.js"></script>
+    <script src="src/js/OrbitControls.js"></script>
+    <script src="src/js/GLTFLoader.js"></script>
+    <script src="src/js/DRACOLoader.js"></script>
+</head>
+</head>
+
+<body>
+
+</body>
+<script>
+    var mixer;
+    var clock = new THREE.Clock();
+    var scene = new THREE.Scene();
+    var camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+
+    var renderer = new THREE.WebGLRenderer();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setClearColor(0xffffff);
+
+    let controls = new THREE.OrbitControls(
+        camera,
+        renderer.domElement
+    );
+    controls.enableZoom = true;
+    controls.update();
+    document.body.appendChild(renderer.domElement);
+
+
+    camera.position.z = 5;
+    var loader = new THREE.GLTFLoader();
+    var directionalLight = new THREE.DirectionalLight(0xdddddd, 4);
+    directionalLight.position.set(0, 0, 1).normalize();
+    scene.add(directionalLight);
+
+    loader.setDRACOLoader(new THREE.DRACOLoader());
+
+    // Load a glTF resource
+    loader.load(
+        'assets/buster_drone/scene.gltf',
+        function (gltf) {
+            var object = gltf.scene;
+            object.name = 'drone';
+            object.scale.set(0.01, 0.01, 0.01)
+            var drone = gltf.scene.children[0];
+            drone.traverse((node) => {
+                if (!node.isMesh) return;
+                node.material.wireframe = true;
+            });
+
+            scene.add(object);
+            var animations = gltf.animations;
+            if (animations && animations.length) {
+                mixer = new THREE.AnimationMixer(object);
+                for (var i = 0; i < animations.length; i++) {
+                    var animation = animations[i];
+
+                    animation.duration = 10;
+
+                    var action = mixer.clipAction(animation);
+                    action.play();
+                }
+            }
+
+
+        },
+        // called while loading is progressing
+        function (xhr) {
+
+            console.log((xhr.loaded / xhr.total * 100) + '% loaded');
+
+        },
+        // called when loading has errors
+        function (error) {
+
+            console.log('An error happened');
+
+        }
+    );
+    var animate = function () {
+        requestAnimationFrame(animate);
+        controls.update();
+
+        if (mixer) mixer.update(clock.getDelta());
+        renderer.render(scene, camera);
+    };
+
+    animate();
+
+    function traverseMaterials(object, callback) {
+        object.traverse((node) => {
+            if (!node.isMesh) return;
+            const materials = Array.isArray(node.material) ?
+                node.material : [node.material];
+            materials.forEach(callback);
+        });
+    }
+</script>
+
+</html>

@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="X-UA-Compatible" content="ie=edge" />
+    <title>Test ThreeJs</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/102/three.min.js"></script>
+    <script src="src/js/OrbitControls.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tween.js/16.3.5/Tween.min.js"></script>
+</head>
+
+<body></body>
+<script>
+    var scene = new THREE.Scene();
+    // CAMERA
+    var SCREEN_WIDTH = window.innerWidth,
+        SCREEN_HEIGHT = window.innerHeight;
+    var VIEW_ANGLE = 45,
+        ASPECT = SCREEN_WIDTH / SCREEN_HEIGHT,
+        NEAR = 0.1,
+        FAR = 20000;
+    // camera 1
+    var camera = new THREE.PerspectiveCamera(VIEW_ANGLE, ASPECT, NEAR, FAR);
+    camera.position.z = 15;
+    renderer = new THREE.WebGLRenderer({
+        antialias: true
+    });
+    scene.add(camera);
+    // RENDERER
+    renderer.setSize(SCREEN_WIDTH, SCREEN_HEIGHT);
+    document.body.appendChild(renderer.domElement);
+    var geometry = new THREE.BoxGeometry(1, 1, 1);
+    var material = new THREE.MeshBasicMaterial({
+        color: 0xff0000
+    });
+    var cube = new THREE.Mesh(geometry, material);
+    cube.position.set(2, 3, 1);
+    // cube.rotation.y = Math.PI / 4;
+    scene.add(cube);
+    cube.lookAt(scene.position);
+    var axesHelper = new THREE.AxesHelper(3);
+    scene.add(axesHelper);
+
+    var controls = new THREE.OrbitControls(camera, renderer.domElement);
+    controls.enableZoom = true;
+    controls.update();
+    var dir = cube.quaternion;
+    var matrix = new THREE.Matrix4();
+    matrix.extractRotation(cube.matrix);
+
+    var direction = new THREE.Vector3(0, 0, 0);
+    direction = cube.getWorldDirection(direction);
+    //normalize the direction vector (convert to vector of length 1)
+    // dir.normalize();
+
+    var origin = cube.position
+    var length = 1;
+    var hex = 0xffff00;
+
+    var arrowHelper = new THREE.ArrowHelper(direction, origin, length, hex);
+    scene.add(arrowHelper);
+
+    var target = {
+        x: 0,
+        y: 0,
+        z: 0
+    };
+    var rotation = {
+        x: cube.rotation.x,
+        y: cube.rotation.y,
+        z: cube.rotation.z
+    };
+    var tween3 = new TWEEN.Tween(rotation).to(target, 2000);
+
+    tween3.onUpdate(function () {
+        // cube.rotation.x = rotation.x;
+        // cube.rotation.y = rotation.y;
+        cube.rotation.z = rotation.z;
+        let v3 = new THREE.Vector3();
+        cube.getWorldDirection(v3)
+        arrowHelper.setDirection(v3);
+        arrowHelper.setLength(5);
+        //arrowHelper.setDirection(v3.x, v3.y, v3.z);
+
+    });
+    var tween2 = new TWEEN.Tween(rotation).to(target, 2000);
+
+    tween2.onUpdate(function () {
+        // cube.rotation.x = rotation.x;
+        cube.rotation.y = rotation.y;
+        //  cube.rotation.z = rotation.z;
+        let v3 = new THREE.Vector3();
+        cube.getWorldDirection(v3)
+        arrowHelper.setDirection(v3);
+        arrowHelper.setLength(5);
+        //arrowHelper.setDirection(v3.x, v3.y, v3.z);
+
+    });
+    var tween1 = new TWEEN.Tween(rotation).to(target, 2000);
+
+    tween1.onUpdate(function () {
+        cube.rotation.x = rotation.x;
+        cube.rotation.y = rotation.y;
+        cube.rotation.z = rotation.z;
+        let v3 = new THREE.Vector3();
+        cube.getWorldDirection(v3)
+        arrowHelper.setDirection(v3);
+        arrowHelper.setLength(5);
+        //arrowHelper.setDirection(v3.x, v3.y, v3.z);
+
+    });
+
+    tween1.start();
+    animate();
+
+    function animate() {
+        requestAnimationFrame(animate);
+        render();
+        update();
+    }
+
+    function update() {
+        controls.update();
+        TWEEN.update();
+    }
+
+    function render() {
+        renderer.render(scene, camera);
+    }
+</script>
+
+</html>

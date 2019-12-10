@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="X-UA-Compatible" content="ie=edge" />
+    <title>Document</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/102/three.min.js"></script>
+    <script src="src/js/pathfinding-browser.js"></script>
+    <script src="src/js/OrbitControls.js"></script>
+</head>
+
+<body></body>
+<script>
+    const config = {
+        xpad: 2,
+        ypad: 1,
+        zpad: 2
+    };
+    const create3Dmatrix = (x, y, z, width, height) => {
+        let matrix = [];
+        for (let k = 0; k < y; k++) {
+            let h = [];
+            for (let j = 0; j < z; j++) {
+                let m = [];
+                for (let i = 0; i < x; i++) {
+                    let neighbours = [];
+                    let currentIndex = i + j * z + k * x * z;
+                    let _left = i - 1 == -1 ? null : currentIndex - 1;
+                    let _right = i + 1 == x ? null : currentIndex + 1;
+                    let _top = j - 1 == -1 ? null : i + (j - 1) * z + k * x * z;
+                    let _bottom = j + 1 == z ? null : i + (j + 1) * z + k * x * z;
+                    let _down = k - 1 == -1 ? null : i + j * z + (k - 1) * x * z;
+                    let _up = k + 1 == z ? null : i + j * z + (k + 1) * x * z;
+                    if (_left != null) neighbours.push(_left);
+                    if (_right != null) neighbours.push(_right);
+                    if (_top != null) neighbours.push(_top);
+                    if (_bottom != null) neighbours.push(_bottom);
+                    if (_up != null) neighbours.push(_up);
+                    if (_down != null) neighbours.push(_down);
+                    m.push({
+                        x: i,
+                        y: k,
+                        z: j,
+                        x_2D: i * config.xpad,
+                        y_2D: k * config.ypad,
+                        z_2D: j * config.zpad,
+                        x_3D: i * width / x,
+                        y_3D: k * config.ypad,
+                        z_3D: j * height / z,
+                        walkable: 0, //true and 1 =false
+                        node: i + j * z + k * x * z,
+                        n_left: _left,
+                        n_right: _right,
+                        n_top: _top,
+                        n_bottom: _bottom,
+                        n_up: _up,
+                        n_down: _down,
+                        n_neighbours: neighbours
+                    });
+                }
+                h.push(m);
+            }
+            matrix.push(h);
+        }
+        return matrix;
+    };
+
+    function updateNodes(mat, currentNodes) {
+        let nodes = currentNodes;
+        mat.forEach(function (y) {
+            y.forEach(function (z) {
+                z.forEach(function (n) {
+                    if (n.walkable == 0) {
+                        //If a node is not walkable then no neighbours
+                        n.n_neighbours.forEach(nb => {
+                            if (mat[n.y][n.z][n.x].walkable == 0) {
+                                //If its default neighbour is not walkable then pass else update
+                                nodes[n.node].neighbors.push(nodes[nb]);
+                            }
+                        });
+                    }
+                });
+            });
+        });
+        return nodes;
+    }
+
+    function fillNodeData(mat) {
+        let nodes = [];
+        mat.forEach(function (y) {
+            y.forEach(function (z) {
+                z.forEach(function (n) {
+                    let node = new PF.Node(n.x_3D, n.y_3D, n.z_3D);
+                    node.indexX = n.x;
+                    node.indexY = n.y;
+                    node.indexZ = n.z;
+                    nodes.push(node);
+                });
+            });
+        });
+        return nodes;
+    }
+    var matrix = create3Dmatrix(10, 3, 10);
+    var nodes = fillNodeData(matrix);
+
+    const VR_CANVAS_WIDTH = window.innerWidth,
+        VR_CANVAS_HEIGHT = window.innerHeight;
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(
+        75,
+        VR_CANVAS_WIDTH / VR_CANVAS_HEIGHT,
+        0.1,
+        1000
+    );
+    let controls = new THREE.OrbitControls(camera);
+    controls.enableZoom = true;
+    controls.update();
+    camera.position.z = 15;
+    const renderer = new THREE.WebGLRenderer({
+        alpha: true,
+        antialias: false
+    });
+    renderer.setSize(VR_CANVAS_WIDTH, VR_CANVAS_HEIGHT);
+    // let boxgeo = new THREE.BoxGeometry(7, 7, 7);
+    // let material = new THREE.MeshBasicMaterial({
+    //     color: 0x0000ff,
+    //     wireframe: true
+    //     // opacity: 0.5
+    // });
+    // let cube = new THREE.Mesh(boxgeo, material);
+
+    // cube.position.x = 2;
+    // cube.position.y = 2;
+    // cube.position.z = 5;
+    // // cube.matrixWorldNeedsUpdate = true;
+    // boxgeo.computeBoundingBox();
+    // cube.name = "obstacle";
+    // scene.add(cube);
+    var length = 12,
+        width = 8;
+
+    var shape = new THREE.Shape();
+    shape.moveTo(0, 0);
+    shape.lineTo(0, width);
+    shape.lineTo(length, width);
+    shape.lineTo(length, 0);
+    shape.lineTo(0, 0);
+
+    var extrudeSettings = {
+        steps: 2,
+        depth: 16,
+        bevelEnabled: false,
+        bevelThickness: 1,
+        bevelSize: 1,
+        bevelSegments: 1
+    };
+
+    var geometry = new THREE.ExtrudeBufferGeometry(shape, extrudeSettings);
+    var cmaterial = new THREE.MeshBasicMaterial({
+        color: 0x00ff00,
+        transparent: true,
+        opacity: 0.6
+    });
+    var mesh = new THREE.Mesh(geometry, cmaterial);
+    mesh.name = 'obstacle'
+    scene.add(mesh);
+
+
+
+
+    nodes.forEach(node => {
+        var object = scene.getObjectByName("obstacle");
+        var bbox = new THREE.Box3().setFromObject(object);
+        // console.log(bbox);
+        let material = null;
+        if (
+            bbox.containsPoint({
+                x: node.x,
+                y: node.y,
+                z: node.z
+            })
+        ) {
+            material = new THREE.MeshBasicMaterial({
+                color: 0xffff00,
+                wireframe: true
+            });
+            //Place some obstacles at given cells
+            console.log(node)
+            console.log(matrix)
+            matrix[node.indexY][node.indexZ][node.indexX].walkable = 1;
+
+
+        } else {
+            material = new THREE.MeshBasicMaterial({
+                color: 0xff0000
+            });
+        }
+        let geometry = new THREE.BoxGeometry(1, 1, 1);
+
+        let cube = new THREE.Mesh(geometry, material);
+        cube.name = "grid";
+        cube.position.x = node.x;
+        cube.position.y = node.y;
+        cube.position.z = node.z;
+        scene.add(cube);
+    });
+    nodes = updateNodes(matrix, nodes);
+    console.log(matrix)
+    console.log(nodes)
+    document.body.appendChild(renderer.domElement);
+    animate();
+
+    function animate() {
+        requestAnimationFrame(animate);
+        renderer.render(scene, camera);
+    }
+</script>
+
+</html>

@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+    <title>Document</title>
+    <script src="https://aframe.io/releases/0.9.0/aframe.min.js"></script>
+
+</head>
+
+<body>
+    <a-scene>
+        <a-assets>
+            <a-asset-item id="crate-obj" src="src/data/tech-lib.obj"></a-asset-item>
+            <a-asset-item id="crate-mtl" src="src/data/tech-lib.mtl"></a-asset-item>
+        </a-assets>
+
+        <!-- Using the asset management system. -->
+        <a-obj-model scale="0.001 0.001 0.001" src="#crate-obj" mtl="#crate-mtl"></a-obj-model>
+
+        <!-- Defining the URL inline. Not recommended but may be more comfortable. -->
+        <!-- /<a-obj-model src="crate.obj" mtl="crate.mtl"></a-obj-model> -->
+    </a-scene>
+</body>
+
+</html>

@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+    <title>Document</title>
+    <script src='https://api.mapbox.com/mapbox-gl-js/v0.53.0/mapbox-gl.js'></script>
+    <link href='https://api.mapbox.com/mapbox-gl-js/v0.53.0/mapbox-gl.css' rel='stylesheet' />
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/102/three.min.js"></script>
+    <script src="src/js/OrbitControls.js"></script>
+    <script src="src/js/astar.js"></script>
+    <script src="src/js/ar.min.js"></script>
+</head>
+<style>
+    body {
+        margin: 0;
+        padding: 0;
+    }
+
+    #map {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        width: 1024px;
+        height: 512px;
+        display: none;
+    }
+</style>
+
+<body>
+    <div id="map"></div>
+</body>
+<script>
+    const CENTER_LON = -101.875,
+        CENTER_LAT = 33.5845;
+    const zoom = 15;
+    const deg2rad = deg => {
+        return deg * (Math.PI / 180);
+    };
+    const mercatorY = lat => {
+        lat = deg2rad(lat);
+        return (
+            (256 / Math.PI) *
+            Math.pow(2, zoom) *
+            (Math.PI - Math.log(Math.tan(Math.PI / 4 + lat / 2)))
+        );
+    };
+    const mercatorX = lon => {
+        lon = deg2rad(lon);
+        return (256 / Math.PI) * Math.pow(2, zoom) * (lon + Math.PI);
+    };
+    const RESCUEPOINTS = [];
+    const config = {
+        zoom: 15,
+        speed: 1,
+        agent: {
+            x: -147,
+            y: 108,
+            z: 0
+        },
+        plane: {
+            width: 1024,
+            height: 512
+        },
+        grid: {
+            rows: 128,
+            cols: 256,
+            cellSize: 4,
+            centerX: 512,
+            centerY: 256
+        }
+    };
+    const updateGrid = (boards, highways) => {
+        for (let highway of highways) {
+            for (let n = 0; n < highway.nodes.length - 1; n++) {
+                let x1 = mercatorX(highway.nodes[n].ref.lon) - cx + config.grid.centerX;
+                let y1 = mercatorY(highway.nodes[n].ref.lat) - cy + config.grid.centerY;
+
+                let x2 =
+                    mercatorX(highway.nodes[n + 1].ref.lon) - cx + config.grid.centerX;
+                let y2 =
+                    mercatorY(highway.nodes[n + 1].ref.lat) - cy + config.grid.centerY;
+
+                let distance = Math.sqrt(Math.pow(x2 - x1, 2) + Math.pow(y2 - y1, 2));
+                let directionX = x2 - x1;
+                let directionY = y2 - y1;
+
+                var signX = Math.sign(directionX);
+                var signY = Math.sign(directionY);
+                var deltaX = directionX / distance;
+                var deltaY = directionY / distance;
+                for (
+                    let x = x1, y = y1;; x = x + deltaX * config.speed, y = y + deltaY * config.speed
+                ) {
+                    if (signX === Math.sign(x2 - x) && signY === Math.sign(y2 - y)) {
+                        let rowY = Math.round(y / config.grid.cellSize);
+                        let colX = Math.round(x / config.grid.cellSize);
+                        if (
+                            colX >= 0 &&
+                            colX < config.grid.cols &&
+                            rowY >= 0 &&
+                            rowY < config.grid.rows
+                        ) {
+                            boards[rowY][colX] = 1;
+                        }
+                    } else {
+                        break;
+                    }
+                }
+            }
+        }
+
+        return boards;
+    };
+
+    const plane_width = 1024,
+        plane_height = 512;
+    let _static_Mapbox =
+        `https://api.mapbox.com/styles/v1/mapbox/light-v9/static/${CENTER_LON},${CENTER_LAT},${zoom},0,0/${plane_width}x${plane_height}?access_token=pk.eyJ1IjoidmluaG50IiwiYSI6ImNqb2VqdXZvaDE4cnkzcG80dXkxZzlhNWcifQ.G6sZ1ukp_DhiSmCvgKblVQ`;
+    const VR_CANVAS_WIDTH = window.innerWidth,
+        VR_CANVAS_HEIGHT = window.innerHeight;
+    const OBJECTS_INTERSECTS = [];
+    const extrudeSettings = {
+        steps: 2,
+        depth: 50,
+        bevelEnabled: true,
+        bevelThickness: 1,
+        bevelSize: 1,
+        bevelSegments: 1
+    };
+    var ready = false;
+    const cx = mercatorX(CENTER_LON);
+    const cy = mercatorY(CENTER_LAT);
+    const boardGrid = (rows, cols) => {
+        let boards = [];
+        for (let y = 0; y < rows; y++) {
+            boards[y] = [];
+            for (let x = 0; x < cols; x++) {
+                boards[y][x] = 0;
+            }
+        }
+        return boards;
+    };
+
+    const AIGEO = new THREE.SphereGeometry(5, 32, 32);
+    const AIMat = new THREE.MeshBasicMaterial({
+        color: '#FF0000'
+    });
+    const AI = new THREE.Mesh(AIGEO, AIMat);
+    AI.position.set(config.agent.x, config.agent.y, 2.5);
+
+
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(
+        75,
+        VR_CANVAS_WIDTH / VR_CANVAS_HEIGHT,
+        0.1,
+        1000
+    );
+
+    const renderer = new THREE.WebGLRenderer({
+        alpha: true,
+        antialias: true
+    });
+    renderer.setSize(VR_CANVAS_WIDTH, VR_CANVAS_HEIGHT);
+    let controls = new THREE.OrbitControls(camera);
+    controls.enableZoom = true;
+    controls.update();
+    document.body.appendChild(renderer.domElement);
+    var ARGroup = new THREE.Group();
+    const planeGeometry = new THREE.PlaneGeometry(plane_width, plane_height);
+    let planeTexture = new THREE.TextureLoader().load(_static_Mapbox);
+    const planeMat = new THREE.MeshBasicMaterial({
+        map: planeTexture
+    });
+    const planeMesh = new THREE.Mesh(planeGeometry, planeMat);
+    camera.position.z = 300;
+
+    scene.add(ARGroup);
+    scene.add(AI);
+    var arToolkitSource = new THREEx.ArToolkitSource({
+        // to read from the webcam 
+        sourceType: 'webcam',
+
+    })
+    arToolkitSource.init(function onReady() {
+        onResize()
+    })
+
+    // handle resize
+    window.addEventListener('resize', function () {
+        onResize()
+    })
+
+    function onResize() {
+        arToolkitSource.onResize()
+        arToolkitSource.copySizeTo(renderer.domElement)
+        if (arToolkitContext.arController !== null) {
+            arToolkitSource.copySizeTo(arToolkitContext.arController.canvas)
+        }
+    }
+    var arToolkitContext = new THREEx.ArToolkitContext({
+        cameraParametersUrl: 'src/data/camera_para.dat',
+        detectionMode: 'mono',
+    })
+    // initialize it
+    arToolkitContext.init(function onCompleted() {
+        // copy projection matrix to camera
+        camera.projectionMatrix.copy(arToolkitContext.getProjectionMatrix());
+    })
+    var artoolkitMarker = new THREEx.ArMarkerControls(arToolkitContext, ARGroup, {
+        type: 'pattern',
+        patternUrl: 'src/data/patt.hiro',
+
+    })
+    var rescueGroup = new THREE.Group();
+    scene.add(rescueGroup);
+    //  ARGroup.add(planeMesh);
+
+    mapboxgl.accessToken = 'pk.eyJ1IjoidmluaG50IiwiYSI6ImNqb2VqdXZvaDE4cnkzcG80dXkxZzlhNWcifQ.G6sZ1ukp_DhiSmCvgKblVQ';
+    var map = new mapboxgl.Map({
+        container: 'map', // container id
+        style: 'mapbox://styles/mapbox/streets-v9', // stylesheet location
+        center: [CENTER_LON, CENTER_LAT], // starting position [lng, lat]
+        zoom: 15 // starting zoom
+    });
+    let bounds = map.getBounds();
+    //bbox = min Longitude , min Latitude , max Longitude , max Latitude
+    //href="https://overpass-api.de/api/map?bbox=-101.8621,33.5736,-101.8483,33.5822"
+    fetch(
+            `https://overpass-api.de/api/map?bbox=${bounds._sw.lng},${bounds._sw.lat},${bounds._ne.lng},${bounds._ne.lat}`
+        )
+        .then(response => response.text())
+        .then(str => (new window.DOMParser()).parseFromString(str, "text/xml"))
+        .then(data => {
+
+            let nodeRef = [].map.call(data.querySelectorAll("node"), n => ({
+                id: n.getAttribute("id"),
+                lat: n.getAttribute("lat"),
+                lon: n.getAttribute("lon")
+            }));
+            let ways = [].map.call(data.querySelectorAll("way"), way => ({
+                id: way.getAttribute("id"),
+                nodes: [].map.call(way.querySelectorAll("nd"), ref => ({
+                    ref: nodeRef.find(obj => obj.id == ref.getAttribute("ref"))
+                })),
+                type: [].map.call(way.querySelectorAll("tag"), tag => tag.getAttribute("k"))
+            }));
+            //Building list
+            let buildings = ways.filter(way => way.type.includes("building"));
+            let highways = ways.filter(way => way.type.includes("highway"));
+
+            //Add building
+            for (let building of buildings) {
+                let shape = new THREE.Shape();
+                for (let [index, node] of building.nodes.entries()) {
+                    let x = mercatorX(node.ref.lon) - cx;
+                    let y = cy - mercatorY(node.ref.lat);
+                    index == 0 ? shape.moveTo(x, y) : shape.lineTo(x, y);
+                }
+                let shapeGeo = new THREE.ExtrudeBufferGeometry(shape, extrudeSettings);
+                let shapeMat = new THREE.MeshBasicMaterial({
+                    color: "#993333",
+                    opacity: 0.8,
+                    transparent: true
+                });
+                let shapeMesh = new THREE.Mesh(shapeGeo, shapeMat);
+                ARGroup.add(shapeMesh);
+            }
+
+
+            //Add highway
+            for (let highway of highways) {
+                const lineGeo = new THREE.Geometry();
+                for (let node of highway.nodes) {
+                    let x = mercatorX(node.ref.lon) - cx;
+                    let y = cy - mercatorY(node.ref.lat);
+                    lineGeo.vertices.push(new THREE.Vector3(x, y, 0.3));
+                }
+                const line = new THREE.Line(
+                    lineGeo,
+                    new THREE.LineBasicMaterial({
+                        color: 0x0000ff
+                    })
+                );
+                ARGroup.add(line);
+            }
+
+            var grid = boardGrid(config.grid.rows, config.grid.cols);
+            grid = updateGrid(grid, highways);
+
+            for (let row = 0; row < config.grid.rows; row++) {
+                for (let col = 0; col < config.grid.cols; col++) {
+                    if (grid[row][col] == 1) {
+                        let geometry = new THREE.BoxGeometry(4, 4, 4);
+                        let material = new THREE.MeshBasicMaterial({
+                            color: 0x00ff00
+                        });
+                        let cube = new THREE.Mesh(geometry, material);
+                        cube.position.x = colToX(col);
+                        cube.position.y = rowToY(row);
+                        OBJECTS_INTERSECTS.push(cube);
+                        ARGroup.add(cube);
+                    }
+                }
+            }
+            var graph = new Graph(grid);
+            var start = graph.grid[ytoRow(config.agent.y)][xToCol(config.agent.x)] || graph.grid[21][128];
+            let end = graph.grid[96][139];
+            var result = [];
+
+            var nextX, nextY, startX, startY;
+
+            function colToX(col) {
+                return col * config.grid.cellSize - config.grid.centerX;
+            }
+
+            function xToCol(x) {
+                return Math.round((x + config.grid.centerX) / config.grid.cellSize);
+            }
+
+            function ytoRow(y) {
+                return Math.round((config.grid.centerY - y) / config.grid.cellSize);
+            }
+
+            function rowToY(row) {
+                return config.grid.centerY - row * config.grid.cellSize;
+            }
+
+            function pointClickToGridCell(mouseX, mouseY) {
+                RESCUEPOINTS.push({
+                    pointX: mouseX,
+                    pointY: mouseY
+                });
+
+            }
+            animate();
+
+            function animate() {
+                requestAnimationFrame(animate);
+                controls.update();
+                renderer.render(scene, camera);
+
+                if (result.length > 0) {
+                    console.log("Start following...")
+                    nextX = result[0].y * config.grid.cellSize - config.grid.centerX;
+                    nextY = config.grid.centerY - result[0].x * config.grid.cellSize;
+
+                    let distanceCRT = Math.sqrt(
+                        Math.pow(nextX - startX, 2) + Math.pow(nextY - startY, 2)
+                    );
+                    let deltaXCRT = (nextX - startX) / distanceCRT;
+                    let deltaYCRT = (nextY - startY) / distanceCRT;
+                    let currentdist = Math.sqrt(
+                        Math.pow(nextX - AI.position.x, 2) +
+                        Math.pow(nextY - AI.position.y, 2)
+                    );
+                    if (currentdist < 0.5) {
+                        startX = nextX;
+                        startY = nextY;
+                        result.shift();
+                    } else {
+                        AI.position.x += deltaXCRT * 0.5;
+                        AI.position.y += deltaYCRT * 0.5;
+                    }
+                }
+                rescueGroup.children.forEach((d, i) => {
+                    if (d.position.distanceTo(AI.position) < 3) {
+                        rescueGroup.remove(rescueGroup.children[i]);
+                    }
+                })
+
+
+            }
+            document.addEventListener("contextmenu", onRightClick, false); //Add more rescue points
+            document.addEventListener("click", onLeftClick, false); //Update AI position
+            document.addEventListener('keypress', onKeyPress, false);
+
+            function onKeyPress(e) {
+                var key = e.which || e.keyCode;
+                if (key === 13) { // 13 is enter
+                    ready = !ready;
+                    if (ready) {
+                        let tempStart = start;
+                        do {
+                            let min = Infinity;
+                            let index = Infinity;
+                            let restemp = [];
+                            // let start = graph.grid[ytoRow(config.agent.y)][xToCol(config.agent.x)]
+                            for (let i = 0; i < RESCUEPOINTS.length; i++) {
+                                let end = graph.grid[ytoRow(RESCUEPOINTS[i].pointY)][xToCol(RESCUEPOINTS[i].pointX)];
+                                let res = astar.search(graph, tempStart, end);
+                                if (min > res.length) {
+                                    restemp = [];
+                                    restemp = res;
+                                    min = res.length;
+                                    index = i;
+                                }
+                            }
+                            result.push(...restemp);
+                            RESCUEPOINTS.splice(index, 1);
+                            console.log(restemp[restemp.length - 1])
+                            tempStart = graph.grid[restemp[restemp.length - 1].x][restemp[restemp.length - 1].y]
+
+                        }
+                        while (RESCUEPOINTS.length > 0);
+                        startX = result[0].y * config.grid.cellSize - config.grid.centerX;
+                        startY = config.grid.centerY - result[0].x * config.grid.cellSize;
+                        AI.position.set(startX, startY, 2.5);
+
+                    }
+
+                }
+            }
+
+
+            function onLeftClick(event) {
+                event.preventDefault();
+                let raycaster = new THREE.Raycaster();
+                let mouse = new THREE.Vector2();
+                mouse.x = (event.clientX / renderer.domElement.clientWidth) * 2 - 1;
+                mouse.y = -(event.clientY / renderer.domElement.clientHeight) * 2 + 1;
+                raycaster.setFromCamera(mouse, camera);
+                let intersects = raycaster.intersectObjects(OBJECTS_INTERSECTS);
+                if (intersects.length > 0) {
+
+                    AI.position.set(
+                        intersects[0].point.x,
+                        intersects[0].point.y,
+                        intersects[0].point.z
+                    );
+
+                }
+            }
+
+
+
+            function onRightClick(event) {
+                event.preventDefault();
+                let raycaster = new THREE.Raycaster();
+                let mouse = new THREE.Vector2();
+                mouse.x = (event.clientX / renderer.domElement.clientWidth) * 2 - 1;
+                mouse.y = -(event.clientY / renderer.domElement.clientHeight) * 2 + 1;
+                raycaster.setFromCamera(mouse, camera);
+                let intersects = raycaster.intersectObjects(OBJECTS_INTERSECTS);
+                if (intersects.length > 0) {
+                    let geometry = new THREE.SphereGeometry(5, 32, 32);
+                    let material = new THREE.MeshBasicMaterial({
+                        color: 0xffff00
+                    });
+                    let sphere = new THREE.Mesh(geometry, material);
+                    sphere.name = 'rescue';
+                    sphere.position.set(
+                        intersects[0].point.x,
+                        intersects[0].point.y,
+                        intersects[0].point.z
+                    );
+                    rescueGroup.add(sphere);
+                    pointClickToGridCell(intersects[0].point.x, intersects[0].point.y)
+                }
+            }
+
+
+
+        })
+</script>
+
+</html>
